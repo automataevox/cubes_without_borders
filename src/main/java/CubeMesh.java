@@ -8,7 +8,17 @@ public class CubeMesh {
 
     private final int vao, vbo;
 
-    //TODO: Fix Mesh Texture
+    public static final int FACE_VERTICES = 6;
+
+    // face offsets (in vertices, not floats)
+    public static final int[] FACE_OFFSETS = {
+            0,   // FRONT
+            6,   // BACK
+            12,  // LEFT
+            18,  // RIGHT
+            24,  // TOP
+            30   // BOTTOM
+    };
 
     private static final float[] VERTICES = {
             // Front face
@@ -20,12 +30,12 @@ public class CubeMesh {
             -0.5f, -0.5f,  0.5f,  0f, 0f, 1f,  0f, 0f,
 
             // Back face
-            -0.5f, -0.5f, -0.5f,  0f, 0f, -1f,  1f, 0f,
-            0.5f, -0.5f, -0.5f,  0f, 0f, -1f,  0f, 0f,
-            0.5f,  0.5f, -0.5f,  0f, 0f, -1f,  0f, 1f,
-            0.5f,  0.5f, -0.5f,  0f, 0f, -1f,  0f, 1f,
-            -0.5f,  0.5f, -0.5f,  0f, 0f, -1f,  1f, 1f,
-            -0.5f, -0.5f, -0.5f,  0f, 0f, -1f,  1f, 0f,
+            -0.5f, -0.5f, -0.5f,  0f, 0f, -1f,  0f, 0f,
+            -0.5f,  0.5f, -0.5f,  0f, 0f, -1f,  0f, 1f,
+            0.5f,  0.5f, -0.5f,  0f, 0f, -1f,  1f, 1f,
+            0.5f,  0.5f, -0.5f,  0f, 0f, -1f,  1f, 1f,
+            0.5f, -0.5f, -0.5f,  0f, 0f, -1f,  1f, 0f,
+            -0.5f, -0.5f, -0.5f,  0f, 0f, -1f,  0f, 0f,
 
             // Left face
             -0.5f, -0.5f, -0.5f, -1f, 0f, 0f,  0f, 0f,
@@ -68,34 +78,26 @@ public class CubeMesh {
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
-        FloatBuffer buffer = MemoryUtil.memAllocFloat(VERTICES.length);
-        buffer.put(VERTICES).flip();
+        FloatBuffer buf = MemoryUtil.memAllocFloat(VERTICES.length);
+        buf.put(VERTICES).flip();
+        glBufferData(GL_ARRAY_BUFFER, buf, GL_STATIC_DRAW);
+        MemoryUtil.memFree(buf);
 
-        glBufferData(GL_ARRAY_BUFFER, buffer, GL_STATIC_DRAW);
-        MemoryUtil.memFree(buffer);
+        int stride = 8 * Float.BYTES;
+        glVertexAttribPointer(0,3,GL_FLOAT,false,stride,0);
+        glVertexAttribPointer(1,3,GL_FLOAT,false,stride,3*Float.BYTES);
+        glVertexAttribPointer(2,2,GL_FLOAT,false,stride,6*Float.BYTES);
 
-        int stride = 8 * Float.BYTES; // 3 pos + 3 normal + 2 uv
-
-// Position
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
         glEnableVertexAttribArray(0);
-
-// Normal
-        glVertexAttribPointer(1, 3, GL_FLOAT, false, stride, 3 * Float.BYTES);
         glEnableVertexAttribArray(1);
-
-// UV
-        glVertexAttribPointer(2, 2, GL_FLOAT, false, stride, 6 * Float.BYTES);
         glEnableVertexAttribArray(2);
 
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
     }
 
-    public void render() {
+    public void renderFace(Face face) {
         glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, 36); // 6 faces * 2 triangles * 3 vertices = 36
+        glDrawArrays(GL_TRIANGLES, FACE_OFFSETS[face.ordinal()], FACE_VERTICES);
         glBindVertexArray(0);
     }
 

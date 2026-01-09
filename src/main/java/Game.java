@@ -6,6 +6,8 @@ import shader.Shader;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
+import static org.lwjgl.opengl.GL13.glActiveTexture;
 
 import java.io.IOException;
 import java.util.*;
@@ -55,7 +57,7 @@ public class Game {
         GL.createCapabilities();
 
         glEnable(GL_DEPTH_TEST);
-        glEnable(GL_CULL_FACE); // backface culling
+        glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
 
@@ -115,18 +117,41 @@ public class Game {
                 hoveredCube = null;
             }
 
-            // Draw all cubes
             shader.bind();
-            cubeTexture.bind(); // <-- bind texture
+            glActiveTexture(GL_TEXTURE0);
+            cubeTexture.bind();
+
+            shader.setUniform3f("u_LightDir", new Vector3f(-0.5f, -1f, -0.3f).normalize());
+            shader.setUniform3f("u_LightColor", new Vector3f(1f,1f,1f));
+            shader.setUniform3f("u_Ambient", new Vector3f(0.3f,0.3f,0.3f));
+            shader.setUniform1i("u_Texture", 0);
 
             for (Vector3f c : renderList) {
-                shader.setUniformMat4f("u_MVP", mvpCache.get(c));
-                shader.setUniform3f("u_LightDir", new Vector3f(-0.5f, -1f, -0.3f).normalize());
-                shader.setUniform3f("u_LightColor", new Vector3f(1f, 1f, 1f));
-                shader.setUniform3f("u_ObjectColor", new Vector3f(1f, 0.5f, 0.31f));
-                cube.render();
+                EnumSet<Face> faces = getVisibleFaces(c);
+
+                for (Face f : faces) {
+                    // Set AO per face
+                    float ao = 1.0f;
+                    if (f == Face.BOTTOM) ao = 0.5f;
+                    else if (f == Face.LEFT || f == Face.RIGHT) ao = 0.7f;
+                    shader.setUniform1f("u_AO", ao);
+
+                    // Build model matrix for this cube
+                    Matrix4f model = new Matrix4f().translate(c.x, c.y, c.z);
+                    shader.setUniformMat4f("u_Model", model);
+
+                    // Build MVP for this cube (projection * view * model)
+                    Matrix4f mvp = new Matrix4f();
+                    camera.getProjection().mul(camera.getView(), mvp);
+                    mvp.mul(model);
+                    shader.setUniformMat4f("u_MVP", mvp);
+
+                    // Render the face
+                    cube.renderFace(f);
+                }
             }
-            cubeTexture.unbind(); // <-- bind texture
+
+            cubeTexture.unbind();
             shader.unbind();
 
             // Draw highlight on top of hovered cube
@@ -162,7 +187,6 @@ public class Game {
         }
     }
 
-    // --- Cleanup ---
     private void cleanup() {
         cube.cleanup();
         highlightCube.cleanup();
@@ -171,7 +195,6 @@ public class Game {
         glfwTerminate();
     }
 
-    // --- Raycast ---
     private Vector3f raycastBlock() {
         Vector3f origin = camera.getPosition();
         Vector3f dir = camera.getFront();
@@ -190,8 +213,29 @@ public class Game {
         return null;
     }
 
-    // --- Check if cube exists ---
     private boolean isCubeAt(int x, int y, int z) {
         return cubes.contains(new Vector3f(x, y, z));
     }
+
+    private boolean hasCube(int x, int y, int z) {
+        return cubes.contains(new Vector3f(x, y, z));
+    }
+
+    private EnumSet<Face> getVisibleFaces(Vector3f c) {
+        EnumSet<Face> faces = EnumSet.allOf(Face.class);
+
+        for (Face f : Face.values()) {
+            if (hasCube(
+                    (int)c.x + f.dx,
+                    (int)c.y + f.dy,
+                    (int)c.z + f.dz
+            )) {
+                faces.remove(f);
+            }
+        }
+        return faces;
+    }
+
 }
+
+

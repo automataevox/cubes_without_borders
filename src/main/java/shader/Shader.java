@@ -86,4 +86,18 @@ public class Shader {
         int location = GL20.glGetUniformLocation(programId, name);
         GL20.glUniform3f(location, vec.x, vec.y, vec.z);
     }
+
+    public void setUniform1f(String name, float value) {
+        int location = glGetUniformLocation(programId, name);
+        if (location != -1) {
+            glUniform1f(location, value);
+        }
+    }
+
+    public void setUniform1i(String name, int value) {
+        int location = glGetUniformLocation(programId, name);
+        if (location != -1) {
+            glUniform1i(location, value);
+        }
+    }
 }
