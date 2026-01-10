@@ -1,6 +1,7 @@
 package render;
 
 import org.joml.Matrix4f;
+import org.joml.Vector2i;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.GL13;
 import shader.Shader;
@@ -9,12 +10,11 @@ import texture.Texture;
 import camera.Camera;
 import face.Face;
 import world.Block;
+import world.Chunk;
 import world.WorldManager;
 
 import java.io.IOException;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 public class RenderManager {
 
@@ -23,6 +23,7 @@ public class RenderManager {
     private final Camera camera;
     private final WorldManager worldManager;
     private final ShadowManager shadowManager;
+    private final ChunkRenderer chunkRenderer; // ADD THIS
 
     // Cache textures to avoid reloading every frame
     private final Map<String, Texture> textureCache = new HashMap<>();
@@ -37,6 +38,8 @@ public class RenderManager {
                 "shader/cube/cube.vert",
                 "shader/cube/cube.frag"
         );
+        this.chunkRenderer = new ChunkRenderer(world, cam, shadow); // ADD THIS
+
     }
 
     private Texture getTexture(String path) {
@@ -51,17 +54,23 @@ public class RenderManager {
     }
 
     public void render() {
+        // OPTION 1: Use chunk rendering (FAST - 100+ FPS)
+        chunkRenderer.render();
+
+        // OPTION 2: Use old per-block rendering (SLOW - for debugging only)
+        //renderPerBlock(); // Comment this out for production
+    }
+
+    private void renderPerBlock() {
         shader.bind();
         GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        shadowManager.getDepthTexture().bind(); // shadow map
+        shadowManager.getDepthTexture().bind();
 
         // --- Sun movement ---
-        float time = (System.currentTimeMillis() % 120000) / 120000.0f; // 2 min day cycle
+        float time = (System.currentTimeMillis() % 120000) / 120000.0f;
         float sunAngle = time * 2.0f * (float)Math.PI;
         Vector3f sunDir = new Vector3f((float)Math.sin(sunAngle), (float)Math.cos(sunAngle), -0.3f).normalize();
         Vector3f sunColor = new Vector3f(1.0f, 0.95f, 0.85f);
-
-        // --- Global illumination ---
         Vector3f globalIllum = new Vector3f(0.18f, 0.20f, 0.22f);
 
         shader.setUniform3f("u_LightDir", sunDir);
@@ -70,21 +79,33 @@ public class RenderManager {
         shader.setUniform1i("shadowMap", 1);
         shader.setUniformMat4f("u_LightSpaceMatrix", shadowManager.getLightSpaceMatrix());
 
-        // Render all cubes
+        // Group blocks by texture FIRST to reduce texture binds
+        Map<String, List<Vector3f>> blocksByTexture = new HashMap<>();
+
         for (Vector3f cubePos : worldManager.getRenderList()) {
-            // Get block and its texture
             Block block = worldManager.getBlock(cubePos);
             if (block == null) continue;
 
-            Texture texture = getTexture(block.getTexture());
+            blocksByTexture
+                    .computeIfAbsent(block.getTexture(), k -> new ArrayList<>())
+                    .add(cubePos);
+        }
 
+        // Render all blocks of the same texture together
+        for (Map.Entry<String, List<Vector3f>> entry : blocksByTexture.entrySet()) {
+            String texturePath = entry.getKey();
+            if (texturePath.isEmpty()) continue;
+
+            Texture texture = getTexture(texturePath);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             texture.bind();
             shader.setUniform1i("u_Texture", 0);
 
-            EnumSet<Face> visibleFaces = getVisibleFaces(cubePos);
-            for (Face face : visibleFaces) {
-                renderFace(cubePos, face);
+            for (Vector3f cubePos : entry.getValue()) {
+                EnumSet<Face> visibleFaces = getVisibleFaces(cubePos);
+                for (Face face : visibleFaces) {
+                    renderFace(cubePos, face);
+                }
             }
 
             texture.unbind();
@@ -128,6 +149,8 @@ public class RenderManager {
         };
     }
 
+
+
     private EnumSet<Face> getVisibleFaces(Vector3f pos) {
         EnumSet<Face> faces = EnumSet.allOf(Face.class);
 
@@ -145,9 +168,8 @@ public class RenderManager {
     }
 
     public void cleanup() {
-        cubeMesh.cleanup();
+        chunkRenderer.cleanup(); // Clean up chunk renderer
         shader.cleanup();
-        // Cleanup all cached textures
         for (Texture tex : textureCache.values()) {
             tex.cleanup();
         }

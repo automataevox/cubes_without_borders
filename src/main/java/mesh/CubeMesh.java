@@ -106,6 +106,32 @@ public class CubeMesh {
         glBindVertexArray(0);
     }
 
+    public static void addFace(FloatBuffer buffer, int x, int y, int z, Face face) {
+        float[][] verts = face.getVertices();
+
+        // CORRECT texture coordinates for a cube face
+        float[][] texCoords = {
+                {0.0f, 0.0f},  // bottom-left
+                {1.0f, 0.0f},  // bottom-right
+                {1.0f, 1.0f},  // top-right
+                {1.0f, 1.0f},  // top-right (duplicate)
+                {0.0f, 1.0f},  // top-left
+                {0.0f, 0.0f}   // bottom-left (duplicate)
+        };
+
+        for (int i = 0; i < 6; i++) {
+            // Position (3 floats)
+            buffer.put(verts[i][0] + x);
+            buffer.put(verts[i][1] + y);
+            buffer.put(verts[i][2] + z);
+
+            // Texture coordinates (2 floats) - MAKE SURE THESE ARE ADDED!
+            buffer.put(texCoords[i][0]);  // u
+            buffer.put(texCoords[i][1]);  // v
+        }
+    }
+
+
     public void cleanup() {
         glDeleteBuffers(vbo);
         glDeleteVertexArrays(vao);

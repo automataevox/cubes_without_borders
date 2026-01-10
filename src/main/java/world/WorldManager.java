@@ -9,19 +9,29 @@ import world.generator.NoiseGenerator;
 import java.util.*;
 
 public class WorldManager {
-
+    private final Map<Vector2i, Chunk> chunks = new HashMap<>();
     private final Map<Vector3f, Block> blocks = new HashMap<>();
     private final Map<Vector2i, Boolean> loadedChunks = new HashMap<>();
-
     private final int CHUNK_SIZE = 16;
-    private final int RENDER_DISTANCE = 3; // chunks around player
+    private final int RENDER_DISTANCE = 3;
 
     private final NoiseGenerator noise = new NoiseGenerator(System.currentTimeMillis());
 
-    // --- Generate a single chunk at chunk coordinates ---
+    // SIMPLE VERSION - just use chunks map
+    public List<Chunk> getLoadedChunks() {
+        return new ArrayList<>(chunks.values());
+    }
+
+    public Chunk getChunkAt(int chunkX, int chunkZ) {
+        return chunks.get(new Vector2i(chunkX, chunkZ));
+    }
+
     public void generateChunk(int chunkX, int chunkZ) {
         Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
-        if (loadedChunks.containsKey(chunkKey)) return;
+        if (chunks.containsKey(chunkKey)) return;
+
+        Chunk chunk = new Chunk(chunkX, 0, chunkZ);
+        chunks.put(chunkKey, chunk);
         loadedChunks.put(chunkKey, true);
 
         int worldXOffset = chunkX * CHUNK_SIZE;
@@ -33,18 +43,19 @@ public class WorldManager {
                 int worldZ = z + worldZOffset;
 
                 float n = noise.interpolatedNoise(worldX * 0.1f, worldZ * 0.1f);
-                int height = (int)((n + 2f) * 4) + 1; // height 1–9
+                int height = (int)((n + 2f) * 4) + 1;
 
                 for (int y = 0; y < height; y++) {
                     Vector3f pos = new Vector3f(worldX, y, worldZ);
                     Block block = (y == height - 1) ? new GrassBlock() : new StoneBlock();
+
                     blocks.put(pos, block);
+                    chunk.setBlock(x, y, z, block);
                 }
             }
         }
     }
 
-    // --- Generate and unload chunks dynamically around player ---
     public void generateChunksAround(Vector3f playerPos) {
         int playerChunkX = (int)Math.floor(playerPos.x / CHUNK_SIZE);
         int playerChunkZ = (int)Math.floor(playerPos.z / CHUNK_SIZE);
@@ -60,33 +71,28 @@ public class WorldManager {
         }
 
         // Unload chunks that are no longer needed
-        Set<Vector2i> toRemove = new HashSet<>();
-        for (Vector2i chunk : loadedChunks.keySet()) {
-            if (!neededChunks.contains(chunk)) {
-                toRemove.add(chunk);
-            }
-        }
-        for (Vector2i chunk : toRemove) {
-            unloadChunk(chunk);
-        }
-    }
+        Iterator<Map.Entry<Vector2i, Chunk>> iterator = chunks.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<Vector2i, Chunk> entry = iterator.next();
+            if (!neededChunks.contains(entry.getKey())) {
+                entry.getValue().cleanup();
+                iterator.remove();
+                loadedChunks.remove(entry.getKey());
 
-    // Remove all blocks in a chunk and mark it as unloaded
-    private void unloadChunk(Vector2i chunkKey) {
-        int worldXOffset = chunkKey.x * CHUNK_SIZE;
-        int worldZOffset = chunkKey.y * CHUNK_SIZE;
-        for (int x = 0; x < CHUNK_SIZE; x++) {
-            for (int z = 0; z < CHUNK_SIZE; z++) {
-                for (int y = 0; y < 256; y++) { // Assuming max world height 256
-                    Vector3f pos = new Vector3f(worldXOffset + x, y, worldZOffset + z);
-                    blocks.remove(pos);
+                // Also remove blocks from flat map
+                int worldXOffset = entry.getKey().x * CHUNK_SIZE;
+                int worldZOffset = entry.getKey().y * CHUNK_SIZE;
+                for (int x = 0; x < CHUNK_SIZE; x++) {
+                    for (int z = 0; z < CHUNK_SIZE; z++) {
+                        for (int y = 0; y < 256; y++) {
+                            blocks.remove(new Vector3f(worldXOffset + x, y, worldZOffset + z));
+                        }
+                    }
                 }
             }
         }
-        loadedChunks.remove(chunkKey);
     }
 
-    // --- Getters / World access ---
     public Block getBlock(Vector3f pos) {
         return blocks.get(pos);
     }
@@ -97,17 +103,22 @@ public class WorldManager {
 
     public void breakBlock(Vector3f pos) {
         blocks.remove(pos);
-    }
 
-    public Collection<Block> getBlocks() {
-        return blocks.values();
+        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
+        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
+        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
+        Chunk chunk = chunks.get(chunkKey);
+        if (chunk != null) {
+            int localX = (int)pos.x - chunkX * CHUNK_SIZE;
+            int localZ = (int)pos.z - chunkZ * CHUNK_SIZE;
+            chunk.setBlock(localX, (int)pos.y, localZ, null);
+        }
     }
 
     public Set<Vector3f> getRenderList() {
         return blocks.keySet();
     }
 
-    // --- Spawn point at first chunk ---
     public Vector3f getSpawnPoint() {
         int spawnX = CHUNK_SIZE / 2;
         int spawnZ = CHUNK_SIZE / 2;
@@ -123,7 +134,11 @@ public class WorldManager {
     }
 
     public void cleanup() {
-        blocks.clear();
+        for (Chunk chunk : chunks.values()) {
+            chunk.cleanup();
+        }
+        chunks.clear();
         loadedChunks.clear();
+        blocks.clear();
     }
 }

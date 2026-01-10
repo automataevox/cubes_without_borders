@@ -22,6 +22,12 @@ public class Game {
     private RaycastManager raycastManager;
     private ShadowManager shadowManager;
 
+    // FPS optimization variables
+    private int frameCount = 0;
+    private float fpsTimer = 0;
+    private float chunkUpdateTimer = 0;
+    private float lastFPS = 0;
+
     public void run() {
         init();
         loop();
@@ -73,6 +79,12 @@ public class Game {
             window.clear();
             worldManager.generateChunksAround(player.getCamera().getPosition());
 
+            chunkUpdateTimer += deltaTime;
+            if (chunkUpdateTimer >= 0.5f) {
+                worldManager.generateChunksAround(player.getCamera().getPosition());
+                chunkUpdateTimer = 0;
+            }
+
             // --- Player Movement ---
             boolean forward = glfwGetKey(window.getHandle(), GLFW_KEY_W) == GLFW_PRESS;
             boolean backward = glfwGetKey(window.getHandle(), GLFW_KEY_S) == GLFW_PRESS;
@@ -101,6 +113,34 @@ public class Game {
     private void handleBlockBreak(Vector3f hoveredCube) {
         if (hoveredCube != null && glfwGetMouseButton(window.getHandle(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
             worldManager.breakBlock(hoveredCube);
+        }
+    }
+
+    // FPS counter method
+    private void updateFPSCounter(float deltaTime) {
+        frameCount++;
+        fpsTimer += deltaTime;
+
+        if (fpsTimer >= 1.0f) {
+            lastFPS = frameCount;
+            System.out.printf("FPS: %.1f | Chunks: %d | Blocks: %d%n",
+                    lastFPS,
+                    worldManager.getLoadedChunks().size(),
+                    worldManager.getRenderList().size());
+            frameCount = 0;
+            fpsTimer = 0;
+        }
+    }
+
+    // OPTIMIZATION 3: Add frame rate limiting to reduce CPU/GPU usage
+    private void limitFPS(float deltaTime) {
+        float targetFrameTime = 1.0f / 144.0f; // Target 144 FPS
+        if (deltaTime < targetFrameTime) {
+            try {
+                Thread.sleep((long) ((targetFrameTime - deltaTime) * 1000));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
