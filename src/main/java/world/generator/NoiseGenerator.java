@@ -17,9 +17,9 @@ public class NoiseGenerator {
 
     // Smooth noise with interpolation
     public float smoothNoise(float x, float z) {
-        float corners = (noise(x-1,z-1) + noise(x+1,z-1) + noise(x-1,z+1) + noise(x+1,z+1)) / 16;
-        float sides   = (noise(x-1,z) + noise(x+1,z) + noise(x,z-1) + noise(x,z+1)) / 8;
-        float center  = noise(x,z) / 4;
+        float corners = (noise(x-4,z-1) + noise(x+1,z-1) + noise(x-1,z+1) + noise(x+1,z+1)) / 5;
+        float sides   = (noise(x-1,z) + noise(x+2,z) + noise(x,z-1) + noise(x,z+1)) / 3;
+        float center  = noise(x,z) / 2;
         return corners + sides + center;
     }
 

@@ -33,7 +33,7 @@ public class WorldManager {
                 int worldZ = z + worldZOffset;
 
                 float n = noise.interpolatedNoise(worldX * 0.1f, worldZ * 0.1f);
-                int height = (int)((n + 1f) * 4) + 1; // height 1–9
+                int height = (int)((n + 2f) * 4) + 1; // height 1–9
 
                 for (int y = 0; y < height; y++) {
                     Vector3f pos = new Vector3f(worldX, y, worldZ);
@@ -44,16 +44,46 @@ public class WorldManager {
         }
     }
 
-    // --- Generate chunks dynamically around player ---
+    // --- Generate and unload chunks dynamically around player ---
     public void generateChunksAround(Vector3f playerPos) {
         int playerChunkX = (int)Math.floor(playerPos.x / CHUNK_SIZE);
         int playerChunkZ = (int)Math.floor(playerPos.z / CHUNK_SIZE);
 
+        Set<Vector2i> neededChunks = new HashSet<>();
         for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
             for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
-                generateChunk(playerChunkX + dx, playerChunkZ + dz);
+                int cx = playerChunkX + dx;
+                int cz = playerChunkZ + dz;
+                neededChunks.add(new Vector2i(cx, cz));
+                generateChunk(cx, cz);
             }
         }
+
+        // Unload chunks that are no longer needed
+        Set<Vector2i> toRemove = new HashSet<>();
+        for (Vector2i chunk : loadedChunks.keySet()) {
+            if (!neededChunks.contains(chunk)) {
+                toRemove.add(chunk);
+            }
+        }
+        for (Vector2i chunk : toRemove) {
+            unloadChunk(chunk);
+        }
+    }
+
+    // Remove all blocks in a chunk and mark it as unloaded
+    private void unloadChunk(Vector2i chunkKey) {
+        int worldXOffset = chunkKey.x * CHUNK_SIZE;
+        int worldZOffset = chunkKey.y * CHUNK_SIZE;
+        for (int x = 0; x < CHUNK_SIZE; x++) {
+            for (int z = 0; z < CHUNK_SIZE; z++) {
+                for (int y = 0; y < 256; y++) { // Assuming max world height 256
+                    Vector3f pos = new Vector3f(worldXOffset + x, y, worldZOffset + z);
+                    blocks.remove(pos);
+                }
+            }
+        }
+        loadedChunks.remove(chunkKey);
     }
 
     // --- Getters / World access ---
