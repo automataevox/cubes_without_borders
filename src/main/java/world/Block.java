@@ -30,4 +30,6 @@ public abstract class Block {
         // Air blocks should return false, all others true
         return !"air".equals(name) && !"empty".equals(name);
     }
+
+    public abstract boolean isTransparent();
 }

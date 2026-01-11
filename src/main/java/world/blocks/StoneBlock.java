@@ -13,4 +13,9 @@ public class StoneBlock extends Block {
                 "stone"   // RIGHT
         });
     }
+
+    @Override
+    public boolean isTransparent() {
+        return false;
+    }
 }

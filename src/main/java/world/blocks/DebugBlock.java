@@ -13,4 +13,9 @@ public class DebugBlock extends Block {
                 "debug"   // RIGHT
         });
     }
+
+    @Override
+    public boolean isTransparent() {
+        return false;
+    }
 }

@@ -13,4 +13,9 @@ public class DirtBlock extends Block {
                 "dirt"   // RIGHT
         });
     }
+
+    @Override
+    public boolean isTransparent() {
+        return false;
+    }
 }

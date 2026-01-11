@@ -13,8 +13,8 @@ public class WorldManager {
     private final Map<Vector2i, Chunk> chunks = new HashMap<>();
     private final Map<Vector3f, Block> blocks = new HashMap<>();
     private final int CHUNK_SIZE = 16;
-    private final int RENDER_DISTANCE = 6;
-    private final int PRELOAD_DISTANCE = 3;
+    private final int RENDER_DISTANCE = 3;
+    private final int PRELOAD_DISTANCE = 0;
 
     // Chunk loading queue
     private final Queue<Vector2i> chunksToGenerate = new LinkedList<>();

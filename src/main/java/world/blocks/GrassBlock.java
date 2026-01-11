@@ -13,4 +13,9 @@ public class GrassBlock extends Block {
                 "dirt"            // BOTTOM (5)
         });
     }
+
+    @Override
+    public boolean isTransparent() {
+        return false;
+    }
 }
