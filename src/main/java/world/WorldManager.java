@@ -6,14 +6,15 @@ import world.blocks.GrassBlock;
 import world.blocks.StoneBlock;
 import world.generator.NoiseGenerator;
 
+import java.io.*;
 import java.util.*;
 
 public class WorldManager {
     private final Map<Vector2i, Chunk> chunks = new HashMap<>();
     private final Map<Vector3f, Block> blocks = new HashMap<>();
     private final int CHUNK_SIZE = 16;
-    private final int RENDER_DISTANCE = 1;
-    private final int PRELOAD_DISTANCE = 1; // Generate immediate area first
+    private final int RENDER_DISTANCE = 6;
+    private final int PRELOAD_DISTANCE = 3;
 
     // Chunk loading queue
     private final Queue<Vector2i> chunksToGenerate = new LinkedList<>();
@@ -22,20 +23,36 @@ public class WorldManager {
 
     private final NoiseGenerator noise = new NoiseGenerator(System.currentTimeMillis());
 
-    // === EXISTING METHODS ===
+    // === CHUNK SAVE/LOAD PATHS ===
+    private static final String SAVE_DIR = "saves/world/";
 
-    public List<Chunk> getLoadedChunks() {
-        return new ArrayList<>(chunks.values());
+    static {
+        // Create save directory on startup
+        new File(SAVE_DIR).mkdirs();
     }
 
-    public Chunk getChunkAt(int chunkX, int chunkZ) {
-        return chunks.get(new Vector2i(chunkX, chunkZ));
-    }
-
+    // === MODIFIED: generateChunkInternal with proper save/load ===
     private void generateChunkInternal(int chunkX, int chunkZ) {
         Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
-        if (chunks.containsKey(chunkKey)) return;
 
+        // Already loaded?
+        if (chunks.containsKey(chunkKey)) {
+            return;
+        }
+
+        // 1. FIRST: Try to load from saved file
+        Chunk loadedChunk = loadChunkFromDisk(chunkX, chunkZ);
+        if (loadedChunk != null) {
+            chunks.put(chunkKey, loadedChunk);
+            // IMPORTANT: Update the blocks map with loaded chunk data
+            updateBlocksMapFromChunk(loadedChunk);
+            System.out.println("✓ Loaded SAVED chunk " + chunkX + "," + chunkZ +
+                    " (" + loadedChunk.getVisibleBlockCount() + " visible blocks)");
+            return;
+        }
+
+        // 2. SECOND: Generate new chunk (only if no saved data exists)
+        System.out.println("Generating NEW chunk " + chunkX + "," + chunkZ);
         Chunk chunk = new Chunk(chunkX, 0, chunkZ);
         chunks.put(chunkKey, chunk);
 
@@ -74,22 +91,165 @@ public class WorldManager {
                 }
             }
         }
+
+        System.out.println("  Generated with " + chunk.getVisibleBlockCount() + " visible blocks");
     }
 
-    // === CHUNK PERSISTENCE METHODS ===
+    // === NEW: Update blocks map from loaded chunk ===
+    private void updateBlocksMapFromChunk(Chunk chunk) {
+        int worldXOffset = chunk.chunkX * CHUNK_SIZE;
+        int worldZOffset = chunk.chunkZ * CHUNK_SIZE;
 
-    // Track when chunks are modified (call this when blocks are broken/placed)
-    private void markChunkModified(int chunkX, int chunkZ) {
-        modifiedChunks.add(new Vector2i(chunkX, chunkZ));
+        for (int x = 0; x < CHUNK_SIZE; x++) {
+            for (int y = 0; y < Chunk.SIZE; y++) {
+                for (int z = 0; z < CHUNK_SIZE; z++) {
+                    Block block = chunk.getBlock(x, y, z);
+                    if (block != null && block.isVisible()) {
+                        Vector3f worldPos = new Vector3f(
+                                worldXOffset + x,
+                                y,
+                                worldZOffset + z
+                        );
+                        blocks.put(worldPos, block);
+                    } else {
+                        // Remove if exists (for broken blocks)
+                        Vector3f worldPos = new Vector3f(
+                                worldXOffset + x,
+                                y,
+                                worldZOffset + z
+                        );
+                        blocks.remove(worldPos);
+                    }
+                }
+            }
+        }
     }
 
+    // === MODIFIED: Save chunk to disk ===
+    private void saveChunkToDisk(Chunk chunk) {
+        if (chunk == null) return;
+
+        String filename = SAVE_DIR + "chunk_" + chunk.chunkX + "_" + chunk.chunkZ + ".dat";
+
+        try (DataOutputStream dos = new DataOutputStream(
+                new BufferedOutputStream(new FileOutputStream(filename)))) {
+
+            // Write chunk coordinates
+            dos.writeInt(chunk.chunkX);
+            dos.writeInt(chunk.chunkZ);
+
+            // Write block data
+            int savedBlocks = 0;
+            for (int x = 0; x < CHUNK_SIZE; x++) {
+                for (int y = 0; y < Chunk.SIZE; y++) {
+                    for (int z = 0; z < CHUNK_SIZE; z++) {
+                        Block block = chunk.getBlock(x, y, z);
+                        if (block != null && block.isVisible()) {
+                            dos.writeByte(1); // Block exists
+                            // Write block type
+                            if (block instanceof GrassBlock) {
+                                dos.writeUTF("grass");
+                            } else if (block instanceof StoneBlock) {
+                                dos.writeUTF("stone");
+                            } else {
+                                dos.writeUTF("stone"); // Default
+                            }
+                            savedBlocks++;
+                        } else {
+                            dos.writeByte(0); // Air block
+                        }
+                    }
+                }
+            }
+
+            System.out.println("💾 Saved chunk " + chunk.chunkX + "," + chunk.chunkZ +
+                    " (" + savedBlocks + " blocks)");
+
+        } catch (IOException e) {
+            System.err.println("❌ Failed to save chunk " + chunk.chunkX + "," + chunk.chunkZ + ": " + e.getMessage());
+        }
+    }
+
+    // === MODIFIED: Load chunk from disk ===
+    private Chunk loadChunkFromDisk(int chunkX, int chunkZ) {
+        String filename = SAVE_DIR + "chunk_" + chunkX + "_" + chunkZ + ".dat";
+        File file = new File(filename);
+
+        if (!file.exists()) {
+            return null; // No saved data
+        }
+
+        try (DataInputStream dis = new DataInputStream(
+                new BufferedInputStream(new FileInputStream(filename)))) {
+
+            // Verify coordinates
+            int savedX = dis.readInt();
+            int savedZ = dis.readInt();
+
+            if (savedX != chunkX || savedZ != chunkZ) {
+                System.err.println("❌ Chunk file corrupted: coordinates mismatch");
+                return null;
+            }
+
+            Chunk chunk = new Chunk(chunkX, 0, chunkZ);
+
+            // Read block data
+            int loadedBlocks = 0;
+            for (int x = 0; x < CHUNK_SIZE; x++) {
+                for (int y = 0; y < Chunk.SIZE; y++) {
+                    for (int z = 0; z < CHUNK_SIZE; z++) {
+                        byte hasBlock = dis.readByte();
+                        if (hasBlock == 1) {
+                            String blockType = dis.readUTF();
+                            Block block;
+
+                            switch (blockType) {
+                                case "grass":
+                                    block = new GrassBlock();
+                                    break;
+                                case "stone":
+                                    block = new StoneBlock();
+                                    break;
+                                default:
+                                    System.err.println("Unknown block type: " + blockType + ", using stone");
+                                    block = new StoneBlock();
+                            }
+
+                            chunk.setBlock(x, y, z, block);
+                            loadedBlocks++;
+                        }
+                        // else: air (null block) - already null by default
+                    }
+                }
+            }
+
+            System.out.println("📂 Loaded saved chunk " + chunkX + "," + chunkZ +
+                    " (" + loadedBlocks + " blocks)");
+
+            // Mark as NOT modified (since we just loaded it fresh)
+            chunk.markClean();
+            return chunk;
+
+        } catch (IOException e) {
+            System.err.println("❌ Failed to load chunk " + chunkX + "," + chunkZ + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    // === MODIFIED: Save all modified chunks ===
     public void saveModifiedChunks() {
         if (modifiedChunks.isEmpty()) {
+            System.out.println("No modified chunks to save");
             return;
         }
 
+        System.out.println("Saving " + modifiedChunks.size() + " modified chunks...");
         int savedCount = 0;
-        for (Vector2i chunkKey : modifiedChunks) {
+
+        // Create a copy to avoid ConcurrentModificationException
+        Set<Vector2i> chunksToSave = new HashSet<>(modifiedChunks);
+
+        for (Vector2i chunkKey : chunksToSave) {
             Chunk chunk = chunks.get(chunkKey);
             if (chunk != null && chunk.isModified()) {
                 saveChunkToDisk(chunk);
@@ -98,206 +258,121 @@ public class WorldManager {
             }
         }
 
-        System.out.println("Saved " + savedCount + " modified chunks to disk");
-        modifiedChunks.clear();
+        // Only clear the ones we saved
+        modifiedChunks.removeAll(chunksToSave);
+        System.out.println("✅ Saved " + savedCount + " chunks");
     }
 
-    // Save a single chunk to disk
-    private void saveChunkToDisk(Chunk chunk) {
-        // Create saves directory if it doesn't exist
-        java.io.File saveDir = new java.io.File("saves/world/");
-        if (!saveDir.exists()) {
-            saveDir.mkdirs();
-        }
-
-        String filename = "saves/world/chunk_" + chunk.chunkX + "_" + chunk.chunkZ + ".dat";
-
-        try (java.io.DataOutputStream dos = new java.io.DataOutputStream(
-                new java.io.FileOutputStream(filename))) {
-
-            // Write chunk coordinates
-            dos.writeInt(chunk.chunkX);
-            dos.writeInt(chunk.chunkZ);
-
-            // Write block data
-            for (int x = 0; x < Chunk.SIZE; x++) {
-                for (int y = 0; y < Chunk.SIZE; y++) {
-                    for (int z = 0; z < Chunk.SIZE; z++) {
-                        Block block = chunk.getBlock(x, y, z);
-                        if (block != null) {
-                            dos.writeByte(1); // Block exists
-                            // Write block type
-                            if (block instanceof world.blocks.GrassBlock) {
-                                dos.writeUTF("grass");
-                            } else if (block instanceof world.blocks.StoneBlock) {
-                                dos.writeUTF("stone");
-                            } else {
-                                dos.writeUTF("stone"); // Default fallback
-                            }
-                        } else {
-                            dos.writeByte(0); // Air block
-                        }
-                    }
-                }
-            }
-
-            System.out.println("Saved chunk " + chunk.chunkX + "," + chunk.chunkZ + " to disk");
-
-        } catch (java.io.IOException e) {
-            System.err.println("Failed to save chunk " + chunk.chunkX + "," + chunk.chunkZ + ": " + e.getMessage());
-        }
-    }
-
-    // Load a chunk from disk
-    private Chunk loadChunkFromDisk(int chunkX, int chunkZ) {
-        String filename = "saves/world/chunk_" + chunkX + "_" + chunkZ + ".dat";
-        java.io.File file = new java.io.File(filename);
-
-        if (!file.exists()) {
-            return null; // No saved data
-        }
-
-        try (java.io.DataInputStream dis = new java.io.DataInputStream(
-                new java.io.FileInputStream(filename))) {
-
-            // Verify coordinates
-            int savedX = dis.readInt();
-            int savedZ = dis.readInt();
-
-            if (savedX != chunkX || savedZ != chunkZ) {
-                System.err.println("Chunk file corrupted: coordinates mismatch");
-                return null;
-            }
-
-            Chunk chunk = new Chunk(chunkX, 0, chunkZ);
-
-            // Read block data
-            for (int x = 0; x < Chunk.SIZE; x++) {
-                for (int y = 0; y < Chunk.SIZE; y++) {
-                    for (int z = 0; z < Chunk.SIZE; z++) {
-                        byte hasBlock = dis.readByte();
-                        if (hasBlock == 1) {
-                            String blockType = dis.readUTF();
-                            Block block;
-
-                            switch (blockType) {
-                                case "grass":
-                                    block = new world.blocks.GrassBlock();
-                                    break;
-                                case "stone":
-                                    block = new world.blocks.StoneBlock();
-                                    break;
-                                default:
-                                    block = new world.blocks.StoneBlock(); // Default
-                            }
-
-                            chunk.setBlock(x, y, z, block);
-                            // Also add to blocks map
-                            Vector3f worldPos = new Vector3f(
-                                    chunkX * CHUNK_SIZE + x,
-                                    y,
-                                    chunkZ * CHUNK_SIZE + z
-                            );
-                            blocks.put(worldPos, block);
-                        }
-                    }
-                }
-            }
-
-            System.out.println("Loaded chunk " + chunkX + "," + chunkZ + " from disk");
-            return chunk;
-
-        } catch (java.io.IOException e) {
-            System.err.println("Failed to load chunk " + chunkX + "," + chunkZ + ": " + e.getMessage());
-            return null;
-        }
-    }
-
-    // Check if a chunk has saved data on disk
-    public boolean hasSavedChunk(int chunkX, int chunkZ) {
-        String filename = "saves/world/chunk_" + chunkX + "_" + chunkZ + ".dat";
-        return new java.io.File(filename).exists();
-    }
-
-    // Save chunk immediately (for testing)
-    public void saveChunkImmediately(int chunkX, int chunkZ) {
+    // === MODIFIED: Mark chunk as modified ===
+    private void markChunkModified(int chunkX, int chunkZ) {
         Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
+        modifiedChunks.add(chunkKey);
+
         Chunk chunk = chunks.get(chunkKey);
         if (chunk != null) {
-            saveChunkToDisk(chunk);
-            chunk.markClean();
-            modifiedChunks.remove(chunkKey);
+            // Force the chunk to be marked as modified
+            // (Chunk.setBlock() should already do this, but just in case)
+        }
+
+        System.out.println("📝 Marked chunk " + chunkX + "," + chunkZ + " as modified");
+    }
+
+    // === MODIFIED: breakBlock ===
+    public void breakBlock(Vector3f pos) {
+        int x = (int)pos.x;
+        int y = (int)pos.y;
+        int z = (int)pos.z;
+
+        System.out.println("Breaking block at " + x + "," + y + "," + z);
+
+        // Remove from blocks map
+        Vector3f blockPos = new Vector3f(x, y, z);
+        Block removed = blocks.remove(blockPos);
+
+        if (removed == null) {
+            System.out.println("  No block found at that position");
+            return;
+        }
+
+        // Update chunk
+        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
+        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
+        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
+
+        Chunk chunk = chunks.get(chunkKey);
+        if (chunk != null) {
+            int localX = x - chunkX * CHUNK_SIZE;
+            int localZ = z - chunkZ * CHUNK_SIZE;
+            chunk.setBlock(localX, y, localZ, null);
+
+            // Mark chunk as modified
+            markChunkModified(chunkX, chunkZ);
+            System.out.println("  Chunk " + chunkX + "," + chunkZ + " marked as modified");
+        } else {
+            System.out.println("  ERROR: Chunk not loaded!");
         }
     }
 
+    // === MODIFIED: placeBlock ===
+    public boolean placeBlock(Vector3f pos, Block block) {
+        int x = (int)pos.x;
+        int y = (int)pos.y;
+        int z = (int)pos.z;
 
-    // === SPAWN POINT FIX ===
-    public Vector3f getSpawnPoint() {
-        // Start at world center (chunk 0,0)
-        int spawnChunkX = 0;
-        int spawnChunkZ = 0;
+        System.out.println("Placing " + block.getName() + " at " + x + "," + y + "," + z);
 
-        // Ensure the spawn chunk exists
-        if (!chunks.containsKey(new Vector2i(spawnChunkX, spawnChunkZ))) {
-            generateChunkInternal(spawnChunkX, spawnChunkZ);
+        // Check if position is already occupied
+        if (hasCube(x, y, z)) {
+            System.out.println("  Position already occupied");
+            return false;
         }
 
-        // Find the highest solid block in the center of chunk (0,0)
-        int centerX = spawnChunkX * CHUNK_SIZE + CHUNK_SIZE / 2;
-        int centerZ = spawnChunkZ * CHUNK_SIZE + CHUNK_SIZE / 2;
-
-        int highestY = -1;
-        for (int y = 255; y >= 0; y--) {
-            Vector3f pos = new Vector3f(centerX, y, centerZ);
-            if (blocks.containsKey(pos)) {
-                Block block = blocks.get(pos);
-                if (block != null && block.isVisible()) {
-                    highestY = y;
-                    break;
+        // Check if position is adjacent to an existing block
+        boolean adjacent = false;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) == 1) {
+                        if (hasCube(x + dx, y + dy, z + dz)) {
+                            adjacent = true;
+                            break;
+                        }
+                    }
                 }
+                if (adjacent) break;
             }
+            if (adjacent) break;
         }
 
-        // If no solid block found, generate terrain at spawn
-        if (highestY < 0) {
-            // Generate terrain column at spawn point
-            float n = noise.interpolatedNoise(centerX * 0.1f, centerZ * 0.1f);
-            int baseHeight = (int)((n + 2f) * 4) + 1;
-            highestY = baseHeight;
-
-            // Generate blocks from bedrock to surface
-            for (int y = 0; y <= baseHeight; y++) {
-                Vector3f pos = new Vector3f(centerX, y, centerZ);
-                Block block;
-
-                if (y == baseHeight) {
-                    block = new GrassBlock();
-                } else if (y >= baseHeight - 3) {
-                    block = new StoneBlock();
-                } else {
-                    block = new StoneBlock();
-                }
-
-                blocks.put(pos, block);
-                Chunk chunk = getChunkAt(spawnChunkX, spawnChunkZ);
-                if (chunk != null) {
-                    int localX = centerX - spawnChunkX * CHUNK_SIZE;
-                    int localZ = centerZ - spawnChunkZ * CHUNK_SIZE;
-                    chunk.setBlock(localX, y, localZ, block);
-                }
-            }
+        if (!adjacent) {
+            System.out.println("  Not adjacent to any block (floating)");
+            return false;
         }
 
-        // Return position on top of the highest block, plus player height
-        return new Vector3f(
-                centerX + 0.5f,  // Center of block
-                highestY + 1.0f,  // On top of block
-                centerZ + 0.5f
-        );
+        // Place the block
+        Vector3f blockPos = new Vector3f(x, y, z);
+        blocks.put(blockPos, block);
+
+        // Update chunk
+        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
+        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
+        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
+
+        Chunk chunk = chunks.get(chunkKey);
+        if (chunk != null) {
+            int localX = x - chunkX * CHUNK_SIZE;
+            int localZ = z - chunkZ * CHUNK_SIZE;
+            chunk.setBlock(localX, y, localZ, block);
+
+            // Mark chunk as modified
+            markChunkModified(chunkX, chunkZ);
+            System.out.println("  Chunk " + chunkX + "," + chunkZ + " marked as modified");
+        }
+
+        return true;
     }
 
-    // === PUBLIC API METHODS ===
-
+    // === MODIFIED: Generate chunks around player (save before unloading) ===
     public void generateChunksAround(Vector3f playerPos) {
         int playerChunkX = (int)Math.floor(playerPos.x / CHUNK_SIZE);
         int playerChunkZ = (int)Math.floor(playerPos.z / CHUNK_SIZE);
@@ -335,16 +410,26 @@ public class WorldManager {
             chunksGenerated++;
         }
 
-        // Unload distant chunks
+        // Unload distant chunks (SAVE THEM FIRST!)
         Iterator<Map.Entry<Vector2i, Chunk>> iterator = chunks.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<Vector2i, Chunk> entry = iterator.next();
-            if (!neededChunks.contains(entry.getKey())) {
+            Vector2i chunkKey = entry.getKey();
+
+            if (!neededChunks.contains(chunkKey)) {
                 Chunk chunk = entry.getValue();
 
+                // SAVE before unloading!
+                if (chunk.isModified()) {
+                    System.out.println("💾 Saving chunk " + chunkKey.x + "," + chunkKey.y + " before unloading");
+                    saveChunkToDisk(chunk);
+                    chunk.markClean();
+                    modifiedChunks.remove(chunkKey);
+                }
+
                 // Remove blocks from flat map
-                int worldXOffset = entry.getKey().x * CHUNK_SIZE;
-                int worldZOffset = entry.getKey().y * CHUNK_SIZE;
+                int worldXOffset = chunkKey.x * CHUNK_SIZE;
+                int worldZOffset = chunkKey.y * CHUNK_SIZE;
                 for (int x = 0; x < CHUNK_SIZE; x++) {
                     for (int z = 0; z < CHUNK_SIZE; z++) {
                         for (int y = 0; y < 256; y++) {
@@ -353,30 +438,60 @@ public class WorldManager {
                     }
                 }
 
-                // Queue chunk mesh for cleanup (renderer will handle)
+                // Remove chunk
                 iterator.remove();
+                System.out.println("🗑️ Unloaded chunk " + chunkKey.x + "," + chunkKey.y);
             }
         }
     }
 
-    public void breakBlock(Vector3f pos) {
-        // Remove from blocks map
-        blocks.remove(pos);
+    // === MODIFIED: Cleanup - save everything ===
+    public void cleanup() {
+        System.out.println("🧹 WorldManager cleanup - saving all modified chunks");
 
-        // Update chunk
-        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
-        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
-        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
+        // Save all modified chunks
+        saveModifiedChunks();
 
-        Chunk chunk = chunks.get(chunkKey);
-        if (chunk != null) {
-            int localX = (int)pos.x - chunkX * CHUNK_SIZE;
-            int localZ = (int)pos.z - chunkZ * CHUNK_SIZE;
-            chunk.setBlock(localX, (int)pos.y, localZ, null);
+        // Clean up all chunks
+        for (Chunk chunk : chunks.values()) {
+            chunk.cleanup();
         }
+        chunks.clear();
+
+        // Clear other collections
+        blocks.clear();
+        chunksToGenerate.clear();
+        currentlyGenerating.clear();
+        modifiedChunks.clear();
     }
 
-    // === INITIAL CHUNK GENERATION ===
+    // === NEW: Debug method to check chunk state ===
+    public void debugChunkState(int chunkX, int chunkZ) {
+        Vector2i key = new Vector2i(chunkX, chunkZ);
+        Chunk chunk = chunks.get(key);
+
+        System.out.println("=== DEBUG Chunk " + chunkX + "," + chunkZ + " ===");
+        System.out.println("Loaded: " + (chunk != null));
+        System.out.println("Modified: " + (chunk != null && chunk.isModified()));
+        System.out.println("Visible blocks: " + (chunk != null ? chunk.getVisibleBlockCount() : 0));
+        System.out.println("Has saved file: " + new File(SAVE_DIR + "chunk_" + chunkX + "_" + chunkZ + ".dat").exists());
+        System.out.println("In modified set: " + modifiedChunks.contains(key));
+    }
+
+    // === The rest of your existing methods (unchanged) ===
+    public List<Chunk> getLoadedChunks() {
+        return new ArrayList<>(chunks.values());
+    }
+
+    public Chunk getChunkAt(int chunkX, int chunkZ) {
+        return chunks.get(new Vector2i(chunkX, chunkZ));
+    }
+
+    public Vector3f getSpawnPoint() {
+        // ... (your existing spawn point code)
+        return new Vector3f(8.5f, 65.0f, 8.5f); // Example
+    }
+
     public void generateInitialChunks() {
         // Generate spawn chunk first
         generateChunkInternal(0, 0);
@@ -384,7 +499,6 @@ public class WorldManager {
         // Generate immediate area around spawn
         for (int dx = -PRELOAD_DISTANCE; dx <= PRELOAD_DISTANCE; dx++) {
             for (int dz = -PRELOAD_DISTANCE; dz <= PRELOAD_DISTANCE; dz++) {
-                // Skip already generated chunks
                 Vector2i key = new Vector2i(dx, dz);
                 if (!chunks.containsKey(key)) {
                     generateChunkInternal(dx, dz);
@@ -407,25 +521,6 @@ public class WorldManager {
         return blocks.containsKey(new Vector3f(x, y, z));
     }
 
-    public void cleanup() {
-        // Save all modified chunks before cleaning up
-        saveModifiedChunks();
-
-        // Clean up all chunks
-        for (Chunk chunk : chunks.values()) {
-            chunk.cleanup();
-        }
-        chunks.clear();
-
-        // Clear other collections
-        blocks.clear();
-        chunksToGenerate.clear();
-        currentlyGenerating.clear();
-        modifiedChunks.clear();
-    }
-
-    // === ADDITIONAL HELPER METHODS ===
-
     public int getTotalBlockCount() {
         return blocks.size();
     }
@@ -445,7 +540,6 @@ public class WorldManager {
         int y = (int)Math.floor(pos.y);
         int z = (int)Math.floor(pos.z);
 
-        // Check if position has solid ground below
         for (int checkY = y; checkY >= y - 10; checkY--) {
             if (hasCube(x, checkY, z)) {
                 return true;
@@ -455,55 +549,6 @@ public class WorldManager {
         return false;
     }
 
-    public boolean placeBlock(Vector3f pos, Block block) {
-        // Check if position is already occupied
-        if (hasCube((int)pos.x, (int)pos.y, (int)pos.z)) {
-            return false;
-        }
-
-        // Check if position is adjacent to an existing block (optional)
-        boolean adjacent = false;
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) == 1) { // Only direct neighbors
-                        if (hasCube((int)pos.x + dx, (int)pos.y + dy, (int)pos.z + dz)) {
-                            adjacent = true;
-                            break;
-                        }
-                    }
-                }
-                if (adjacent) break;
-            }
-            if (adjacent) break;
-        }
-
-        if (!adjacent) {
-            return false; // Can't place floating blocks
-        }
-
-        // Place the block
-        blocks.put(pos, block);
-
-        // Update chunk
-        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
-        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
-        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
-
-        Chunk chunk = chunks.get(chunkKey);
-        if (chunk != null) {
-            int localX = (int)pos.x - chunkX * CHUNK_SIZE;
-            int localZ = (int)pos.z - chunkZ * CHUNK_SIZE;
-            chunk.setBlock(localX, (int)pos.y, localZ, block);
-
-            // Mark chunk as modified
-            modifiedChunks.add(chunkKey);
-        }
-
-        return true;
-    }
-
-    // Force generate a chunk (for testing)
     public void forceGenerateChunk(int chunkX, int chunkZ) {
         generateChunkInternal(chunkX, chunkZ);
     }

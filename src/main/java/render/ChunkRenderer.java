@@ -31,6 +31,9 @@ public class ChunkRenderer {
     private final Map<String, ChunkMesh> chunkMeshes = new HashMap<>();
     private final Map<String, Future<List<ChunkMeshData>>> pendingBuilds = new HashMap<>();
 
+    // Track which chunks are loaded from disk (modified)
+    private final Set<String> savedChunks = new HashSet<>();
+
     // Priority chunks (block breaking)
     private final List<String> priorityChunks = new ArrayList<>();
 
@@ -116,6 +119,11 @@ public class ChunkRenderer {
         // Cleanup
         cleanupRenderState();
 
+        // Log statistics occasionally
+        if (frameCount % 120 == 0) { // Every 2 seconds at 60 FPS
+            logStatistics(visibleChunks.size());
+        }
+
         frameCount++;
     }
 
@@ -173,9 +181,11 @@ public class ChunkRenderer {
                         mesh.buildFromData(meshData);
                         chunkMeshes.put(entry.getKey(), mesh);
                         asyncBuildsCompleted++;
+
+                        System.out.println("✅ Async mesh built for chunk " + entry.getKey());
                     }
                 } catch (Exception e) {
-                    System.err.println("Failed to get async mesh data: " + e.getMessage());
+                    System.err.println("Failed to get async mesh data for " + entry.getKey() + ": " + e.getMessage());
                 }
                 iterator.remove();
             }
@@ -197,12 +207,21 @@ public class ChunkRenderer {
                 continue;
             }
 
+            // Skip if chunk is modified (will be handled by priority or sync)
+            if (chunk.isModified()) {
+                // Modified chunks should be built synchronously to ensure correct state
+                System.out.println("⚠️ Skipping async build for modified chunk " + key);
+                continue;
+            }
+
             // Start async build
             Future<List<ChunkMeshData>> future = ChunkMeshBuilder.buildAsync(
                     chunk.chunkX, chunk.chunkZ, chunk, textureAtlas
             );
             pendingBuilds.put(key, future);
             started++;
+
+            System.out.println("🚀 Started async mesh build for chunk " + key);
         }
     }
 
@@ -222,6 +241,7 @@ public class ChunkRenderer {
                 Future<List<ChunkMeshData>> pending = pendingBuilds.remove(chunkKey);
                 if (pending != null && !pending.isDone()) {
                     pending.cancel(true);
+                    System.out.println("❌ Cancelled async build for priority chunk " + chunkKey);
                 }
 
                 // Build synchronously
@@ -230,10 +250,13 @@ public class ChunkRenderer {
                     oldMesh.cleanup();
                 }
 
+                System.out.println("🔨 Building sync mesh for modified chunk " + chunkKey +
+                        " (modified: " + chunk.isModified() + ")");
+
                 ChunkMesh newMesh = new ChunkMesh();
                 newMesh.buildSync(chunk, textureAtlas);
                 chunkMeshes.put(chunkKey, newMesh);
-                chunk.markClean();
+                chunk.markClean(); // Only mark clean after successful build
 
                 syncBuildsCompleted++;
             }
@@ -291,10 +314,46 @@ public class ChunkRenderer {
         shader.unbind();
     }
 
+    private void logStatistics(int visibleChunks) {
+        System.out.printf(
+                "ChunkRenderer Stats: %d visible, %d cached, %d pending, %d async/sync built%n",
+                visibleChunks,
+                chunkMeshes.size(),
+                pendingBuilds.size(),
+                asyncBuildsCompleted + syncBuildsCompleted
+        );
+    }
 
-    // === ADD THIS METHOD AT THE END (before cleanup()) ===
     public TextureAtlas getTextureAtlas() {
         return textureAtlas;
+    }
+
+    // === NEW: Force rebuild a specific chunk ===
+    public void forceRebuildChunk(int chunkX, int chunkZ) {
+        String key = getChunkKey(chunkX, chunkZ);
+
+        // Cancel any pending async build
+        Future<List<ChunkMeshData>> pending = pendingBuilds.remove(key);
+        if (pending != null && !pending.isDone()) {
+            pending.cancel(true);
+        }
+
+        // Remove old mesh
+        ChunkMesh oldMesh = chunkMeshes.remove(key);
+        if (oldMesh != null) {
+            oldMesh.cleanup();
+        }
+
+        // Add to priority for sync rebuild
+        if (!priorityChunks.contains(key)) {
+            priorityChunks.add(key);
+            System.out.println("🔧 Force rebuild queued for chunk " + key);
+        }
+    }
+
+    // === NEW: Check if chunk mesh exists ===
+    public boolean hasMeshForChunk(int chunkX, int chunkZ) {
+        return chunkMeshes.containsKey(getChunkKey(chunkX, chunkZ));
     }
 
     public void cleanup() {
@@ -310,6 +369,7 @@ public class ChunkRenderer {
 
         // Clear lists
         priorityChunks.clear();
+        savedChunks.clear();
 
         // Cleanup resources
         shader.cleanup();
