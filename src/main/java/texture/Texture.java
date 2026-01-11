@@ -1,7 +1,10 @@
 package texture;
 import org.lwjgl.stb.STBImage;
+import org.lwjgl.system.MemoryUtil;
+
 import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
 
+import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.io.IOException;
@@ -18,40 +21,73 @@ public class Texture {
     private int height;
 
     public Texture(String resourcePath) throws IOException {
+
         try (var stack = stackPush()) {
             IntBuffer w = stack.mallocInt(1);
             IntBuffer h = stack.mallocInt(1);
             IntBuffer channels = stack.mallocInt(1);
 
-            STBImage.stbi_set_flip_vertically_on_load(true);
-            InputStream stream = getClass().getClassLoader().getResourceAsStream(resourcePath);
-            if (stream == null) {
-                throw new IOException("Texture resource not found: " + resourcePath);
+            // First try as file
+            File file = new File(resourcePath);
+            ByteBuffer image;
+
+            if (file.exists()) {
+                image = STBImage.stbi_load(file.getAbsolutePath(), w, h, channels, 4);
+            } else {
+                // Try as resource
+                InputStream stream = getClass().getClassLoader().getResourceAsStream(resourcePath);
+                if (stream == null) {
+                    throw new IOException("Texture not found: " + resourcePath);
+                }
+                byte[] bytes = stream.readAllBytes();
+                ByteBuffer buffer = MemoryUtil.memAlloc(bytes.length);
+                buffer.put(bytes).flip();
+                image = STBImage.stbi_load_from_memory(buffer, w, h, channels, 4);
+                MemoryUtil.memFree(buffer);
             }
-            byte[] bytes = stream.readAllBytes();
-            ByteBuffer buffer = org.lwjgl.system.MemoryUtil.memAlloc(bytes.length);
-            buffer.put(bytes).flip();
-            ByteBuffer image = STBImage.stbi_load_from_memory(buffer, w, h, channels, 4);
-            org.lwjgl.system.MemoryUtil.memFree(buffer);
+
             if (image == null) {
                 throw new IOException("Failed to load texture: " + resourcePath);
             }
 
             width = w.get();
             height = h.get();
+            int comp = channels.get();
+
+            int sampleX = width / 2;
+            int sampleY = height / 2;
+            int pixelIndex = (sampleY * width + sampleX) * comp;
+
+            if (pixelIndex + 2 < width * height * comp) {
+                int r = image.get(pixelIndex) & 0xFF;
+                int g = image.get(pixelIndex + 1) & 0xFF;
+                int b = image.get(pixelIndex + 2) & 0xFF;
+                int a = comp > 3 ? image.get(pixelIndex + 3) & 0xFF : 255;
+            }
 
             id = glGenTextures();
+
             glBindTexture(GL_TEXTURE_2D, id);
 
+            // CRITICAL SETTINGS for texture atlas:
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
-            glGenerateMipmap(GL_TEXTURE_2D);
+            if (comp == 4) {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
+            } else if (comp == 3) {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
+            }
+
+            // Don't generate mipmaps for texture atlas
+            // glGenerateMipmap(GL_TEXTURE_2D);
+
+            glBindTexture(GL_TEXTURE_2D, 0);
 
             STBImage.stbi_image_free(image);
+
         }
     }
 

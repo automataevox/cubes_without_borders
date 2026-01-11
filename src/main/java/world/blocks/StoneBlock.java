@@ -4,6 +4,13 @@ import world.Block;
 
 public class StoneBlock extends Block {
     public StoneBlock() {
-        super("stone", "textures/stone.png");
+        super("stone", new String[] {
+                "stone",  // TOP
+                "stone",  // BOTTOM
+                "stone",  // FRONT
+                "stone",  // BACK
+                "stone",  // LEFT
+                "stone"   // RIGHT
+        });
     }
 }

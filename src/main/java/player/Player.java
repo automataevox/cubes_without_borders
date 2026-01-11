@@ -13,25 +13,64 @@ public class Player {
     private final float height = 1.8f;     // total player height
     private final float width = 0.6f;      // player width
 
+    private long lastMovementTime = System.currentTimeMillis();
+    private static final long MOVEMENT_THRESHOLD_MS = 100; // 100ms threshold
+
     private Vector3f velocity = new Vector3f();
     private boolean onGround = false;
 
-    private final float gravity = -9.8f;
-    private final float jumpStrength = 5f;
+    private final float gravity = -12f;
+    private final float jumpStrength = 7f;
 
     public Player(Camera camera, WorldManager world) {
         this.camera = camera;
         this.world = world;
 
-        // Spawn on top of the ground
-        Vector3f spawn = world.getSpawnPoint();
-        camera.setPosition(new Vector3f(spawn.x, spawn.y + eyeHeight, spawn.z));
+        // Ensure player is actually on ground at spawn
+        Vector3f cameraPos = camera.getPosition();
+        Vector3f feetPos = new Vector3f(cameraPos.x, cameraPos.y - eyeHeight, cameraPos.z);
+
+        // Check if we need to adjust spawn height
+        if (!isOnSolidGround(feetPos)) {
+            System.out.println("Adjusting spawn height...");
+
+            // Find the ground below
+            int groundY = findGroundHeight((int)feetPos.x, (int)feetPos.z);
+            if (groundY > 0) {
+                feetPos.y = groundY + 0.1f; // Just above ground
+                camera.setPosition(new Vector3f(feetPos.x, feetPos.y + eyeHeight, feetPos.z));
+                System.out.println("Adjusted to Y=" + feetPos.y);
+            }
+        }
+
+        onGround = true;
+    }
+
+    private boolean isOnSolidGround(Vector3f feetPos) {
+        // Check blocks directly under feet
+        int checkY = (int)Math.floor(feetPos.y);
+        int checkX = (int)Math.floor(feetPos.x);
+        int checkZ = (int)Math.floor(feetPos.z);
+
+        return world.hasCube(checkX, checkY, checkZ) ||
+                world.hasCube(checkX, checkY-1, checkZ) ||
+                world.hasCube(checkX, checkY-2, checkZ);
+    }
+
+    private int findGroundHeight(int x, int z) {
+        // Search downward from spawn height
+        for (int y = 128; y >= 0; y--) {
+            if (world.hasCube(x, y, z)) {
+                return y + 1; // Return top of block
+            }
+        }
+        return 64; // Default height if no ground found
     }
 
     public void update(float deltaTime, boolean forward, boolean backward, boolean left, boolean right, boolean jump) {
         Vector3f move = new Vector3f();
 
-        float speed = 5f * deltaTime;
+        float speed = 8f * deltaTime;
 
         if (forward)  move.add(new Vector3f(camera.getFront()).mul(speed, new Vector3f()));
         if (backward) move.sub(new Vector3f(camera.getFront()).mul(speed, new Vector3f()));
@@ -65,6 +104,11 @@ public class Player {
 
         // Set camera position at eye height above feet
         camera.setPosition(new Vector3f(feetPos.x, feetPos.y + eyeHeight, feetPos.z));
+    }
+
+    public boolean hasMovedRecently() {
+        long currentTime = System.currentTimeMillis();
+        return (currentTime - lastMovementTime) < MOVEMENT_THRESHOLD_MS;
     }
 
     private boolean checkCollision(Vector3f feetPos) {

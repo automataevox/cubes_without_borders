@@ -1,6 +1,6 @@
-#version 330 core
+#version 410 core
 
-void main()
-{
-    // Nothing to output for depth — depth is automatically written to framebuffer
+// Empty fragment shader - depth is written automatically
+void main() {
+    // gl_FragDepth = gl_FragCoord.z; // Automatic
 }

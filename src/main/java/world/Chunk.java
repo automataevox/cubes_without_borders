@@ -1,55 +1,45 @@
 package world;
 
-import mesh.ChunkMesh;
+import java.util.Arrays;
 
 public class Chunk {
     public static final int SIZE = 16;
-
-    private final Block[] blocks;
-    private ChunkMesh mesh;
-    private boolean needsRebuild = true;
     public final int chunkX, chunkY, chunkZ;
-    private boolean modified = false;  // Track if chunk was modified
+    private final Block[][][] blocks;
+    private boolean modified = false;
+    private int visibleBlockCount = 0; // Track how many blocks are visible
 
-
-    public Chunk(int cx, int cy, int cz) {
-        this.chunkX = cx;
-        this.chunkY = cy;
-        this.chunkZ = cz;
-        this.blocks = new Block[SIZE * SIZE * SIZE];
-    }
-
-    public void setBlock(int x, int y, int z, Block block) {
-        blocks[index(x, y, z)] = block;
-        modified = true;
-
-        // Mark neighbor chunks for rebuild too
-        if (x == 0) markNeighborForRebuild(chunkX - 1, chunkY, chunkZ);
-        if (x == SIZE - 1) markNeighborForRebuild(chunkX + 1, chunkY, chunkZ);
-        if (y == 0) markNeighborForRebuild(chunkX, chunkY - 1, chunkZ);
-        if (y == SIZE - 1) markNeighborForRebuild(chunkX, chunkY + 1, chunkZ);
-        if (z == 0) markNeighborForRebuild(chunkX, chunkY, chunkZ - 1);
-        if (z == SIZE - 1) markNeighborForRebuild(chunkX, chunkY, chunkZ + 1);
-    }
-
-    private void markNeighborForRebuild(int cx, int cy, int cz) {
-        // You'll need to implement this in WorldManager
+    public Chunk(int x, int y, int z) {
+        this.chunkX = x;
+        this.chunkY = y;
+        this.chunkZ = z;
+        this.blocks = new Block[SIZE][SIZE][SIZE];
     }
 
     public Block getBlock(int x, int y, int z) {
-        return blocks[index(x, y, z)];
+        if (x < 0 || y < 0 || z < 0 || x >= SIZE || y >= SIZE || z >= SIZE) {
+            return null;
+        }
+        return blocks[x][y][z];
     }
 
-    private int index(int x, int y, int z) {
-        return x + y * SIZE + z * SIZE * SIZE;
-    }
+    public void setBlock(int x, int y, int z, Block block) {
+        if (x < 0 || y < 0 || z < 0 || x >= SIZE || y >= SIZE || z >= SIZE) {
+            return;
+        }
 
-    public ChunkMesh getMesh() {
-        return mesh;
-    }
+        Block oldBlock = blocks[x][y][z];
+        if (oldBlock != null && oldBlock.isVisible()) {
+            visibleBlockCount--;
+        }
 
-    public void setMesh(ChunkMesh mesh) {
-        this.mesh = mesh;
+        blocks[x][y][z] = block;
+
+        if (block != null && block.isVisible()) {
+            visibleBlockCount++;
+        }
+
+        modified = true;
     }
 
     public boolean isModified() {
@@ -60,18 +50,21 @@ public class Chunk {
         modified = false;
     }
 
-    public boolean needsRebuild() {
-        return needsRebuild;
+    public boolean hasVisibleBlocks() {
+        return visibleBlockCount > 0;
     }
 
-    public void markRebuilt() {
-        needsRebuild = false;
+    public int getVisibleBlockCount() {
+        return visibleBlockCount;
     }
 
     public void cleanup() {
-        if (mesh != null) {
-            mesh.cleanup();
-            mesh = null;
+        // Clear blocks array
+        for (int x = 0; x < SIZE; x++) {
+            for (int y = 0; y < SIZE; y++) {
+                Arrays.fill(blocks[x][y], null);
+            }
         }
+        visibleBlockCount = 0;
     }
 }

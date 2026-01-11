@@ -1,12 +1,11 @@
-#version 330 core
+#version 410 core
 
 layout(location = 0) in vec3 aPos;
 
-uniform mat4 model;
-uniform mat4 lightSpaceMatrix;
+uniform mat4 u_LightSpaceMatrix;
+uniform mat4 u_Model;
 
-void main()
-{
-    // Transform vertex into light's clip space
-    gl_Position = lightSpaceMatrix * model * vec4(aPos, 1.0);
+void main() {
+    vec4 worldPos = u_Model * vec4(aPos, 1.0);
+    gl_Position = u_LightSpaceMatrix * worldPos;
 }

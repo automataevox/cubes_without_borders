@@ -11,13 +11,18 @@ import java.util.*;
 public class WorldManager {
     private final Map<Vector2i, Chunk> chunks = new HashMap<>();
     private final Map<Vector3f, Block> blocks = new HashMap<>();
-    private final Map<Vector2i, Boolean> loadedChunks = new HashMap<>();
     private final int CHUNK_SIZE = 16;
-    private final int RENDER_DISTANCE = 3;
+    private final int RENDER_DISTANCE = 6;
+    private final int PRELOAD_DISTANCE = 3; // Generate immediate area first
+
+    // Chunk loading queue
+    private final Queue<Vector2i> chunksToGenerate = new LinkedList<>();
+    private final Set<Vector2i> currentlyGenerating = new HashSet<>();
 
     private final NoiseGenerator noise = new NoiseGenerator(System.currentTimeMillis());
 
-    // SIMPLE VERSION - just use chunks map
+    // === EXISTING METHODS ===
+
     public List<Chunk> getLoadedChunks() {
         return new ArrayList<>(chunks.values());
     }
@@ -26,16 +31,17 @@ public class WorldManager {
         return chunks.get(new Vector2i(chunkX, chunkZ));
     }
 
-    public void generateChunk(int chunkX, int chunkZ) {
+    private void generateChunkInternal(int chunkX, int chunkZ) {
         Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
         if (chunks.containsKey(chunkKey)) return;
 
         Chunk chunk = new Chunk(chunkX, 0, chunkZ);
         chunks.put(chunkKey, chunk);
-        loadedChunks.put(chunkKey, true);
 
         int worldXOffset = chunkX * CHUNK_SIZE;
         int worldZOffset = chunkZ * CHUNK_SIZE;
+
+        NoiseGenerator stoneNoise = new NoiseGenerator(System.currentTimeMillis() + 12345);
 
         for (int x = 0; x < CHUNK_SIZE; x++) {
             for (int z = 0; z < CHUNK_SIZE; z++) {
@@ -43,11 +49,24 @@ public class WorldManager {
                 int worldZ = z + worldZOffset;
 
                 float n = noise.interpolatedNoise(worldX * 0.1f, worldZ * 0.1f);
-                int height = (int)((n + 2f) * 4) + 1;
+                int baseHeight = (int)((n + 2f) * 4) + 1;
 
-                for (int y = 0; y < height; y++) {
+                float stoneNoiseVal = stoneNoise.interpolatedNoise(worldX * 0.2f, worldZ * 0.2f);
+                int stoneLayers = 10 + (int)((stoneNoiseVal + 1f) * 1.5f);
+
+                int totalHeight = Math.max(baseHeight, stoneLayers + 1);
+
+                for (int y = 0; y < totalHeight; y++) {
                     Vector3f pos = new Vector3f(worldX, y, worldZ);
-                    Block block = (y == height - 1) ? new GrassBlock() : new StoneBlock();
+                    Block block;
+
+                    if (y == totalHeight - 1) {
+                        block = new GrassBlock();
+                    } else if (y >= totalHeight - 1 - stoneLayers) {
+                        block = new StoneBlock();
+                    } else {
+                        block = new StoneBlock();
+                    }
 
                     blocks.put(pos, block);
                     chunk.setBlock(x, y, z, block);
@@ -56,30 +75,118 @@ public class WorldManager {
         }
     }
 
+    // === SPAWN POINT FIX ===
+    public Vector3f getSpawnPoint() {
+        // Start at world center (chunk 0,0)
+        int spawnChunkX = 0;
+        int spawnChunkZ = 0;
+
+        // Ensure the spawn chunk exists
+        if (!chunks.containsKey(new Vector2i(spawnChunkX, spawnChunkZ))) {
+            generateChunkInternal(spawnChunkX, spawnChunkZ);
+        }
+
+        // Find the highest solid block in the center of chunk (0,0)
+        int centerX = spawnChunkX * CHUNK_SIZE + CHUNK_SIZE / 2;
+        int centerZ = spawnChunkZ * CHUNK_SIZE + CHUNK_SIZE / 2;
+
+        int highestY = -1;
+        for (int y = 255; y >= 0; y--) {
+            Vector3f pos = new Vector3f(centerX, y, centerZ);
+            if (blocks.containsKey(pos)) {
+                Block block = blocks.get(pos);
+                if (block != null && block.isVisible()) {
+                    highestY = y;
+                    break;
+                }
+            }
+        }
+
+        // If no solid block found, generate terrain at spawn
+        if (highestY < 0) {
+            // Generate terrain column at spawn point
+            float n = noise.interpolatedNoise(centerX * 0.1f, centerZ * 0.1f);
+            int baseHeight = (int)((n + 2f) * 4) + 1;
+            highestY = baseHeight;
+
+            // Generate blocks from bedrock to surface
+            for (int y = 0; y <= baseHeight; y++) {
+                Vector3f pos = new Vector3f(centerX, y, centerZ);
+                Block block;
+
+                if (y == baseHeight) {
+                    block = new GrassBlock();
+                } else if (y >= baseHeight - 3) {
+                    block = new StoneBlock();
+                } else {
+                    block = new StoneBlock();
+                }
+
+                blocks.put(pos, block);
+                Chunk chunk = getChunkAt(spawnChunkX, spawnChunkZ);
+                if (chunk != null) {
+                    int localX = centerX - spawnChunkX * CHUNK_SIZE;
+                    int localZ = centerZ - spawnChunkZ * CHUNK_SIZE;
+                    chunk.setBlock(localX, y, localZ, block);
+                }
+            }
+        }
+
+        // Return position on top of the highest block, plus player height
+        return new Vector3f(
+                centerX + 0.5f,  // Center of block
+                highestY + 1.0f,  // On top of block
+                centerZ + 0.5f
+        );
+    }
+
+    // === PUBLIC API METHODS ===
+
     public void generateChunksAround(Vector3f playerPos) {
         int playerChunkX = (int)Math.floor(playerPos.x / CHUNK_SIZE);
         int playerChunkZ = (int)Math.floor(playerPos.z / CHUNK_SIZE);
 
         Set<Vector2i> neededChunks = new HashSet<>();
+
+        // Determine which chunks are needed
         for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
             for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
                 int cx = playerChunkX + dx;
                 int cz = playerChunkZ + dz;
+
+                // Circular distance check
+                if (dx * dx + dz * dz > RENDER_DISTANCE * RENDER_DISTANCE) {
+                    continue;
+                }
+
                 neededChunks.add(new Vector2i(cx, cz));
-                generateChunk(cx, cz);
+
+                // Add to generation queue if not already loaded/generating
+                Vector2i chunkKey = new Vector2i(cx, cz);
+                if (!chunks.containsKey(chunkKey) && !currentlyGenerating.contains(chunkKey)) {
+                    chunksToGenerate.add(chunkKey);
+                    currentlyGenerating.add(chunkKey);
+                }
             }
         }
 
-        // Unload chunks that are no longer needed
+        // Generate 1-2 chunks per frame (smooth loading)
+        int chunksGenerated = 0;
+        while (!chunksToGenerate.isEmpty() && chunksGenerated < 2) {
+            Vector2i chunkKey = chunksToGenerate.poll();
+            generateChunkInternal(chunkKey.x, chunkKey.y);
+            currentlyGenerating.remove(chunkKey);
+            chunksGenerated++;
+        }
+
+        // Unload distant chunks
         Iterator<Map.Entry<Vector2i, Chunk>> iterator = chunks.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<Vector2i, Chunk> entry = iterator.next();
             if (!neededChunks.contains(entry.getKey())) {
-                entry.getValue().cleanup();
-                iterator.remove();
-                loadedChunks.remove(entry.getKey());
+                Chunk chunk = entry.getValue();
 
-                // Also remove blocks from flat map
+                // Remove blocks from flat map
                 int worldXOffset = entry.getKey().x * CHUNK_SIZE;
                 int worldZOffset = entry.getKey().y * CHUNK_SIZE;
                 for (int x = 0; x < CHUNK_SIZE; x++) {
@@ -89,8 +196,51 @@ public class WorldManager {
                         }
                     }
                 }
+
+                // Queue chunk mesh for cleanup (renderer will handle)
+                iterator.remove();
             }
         }
+    }
+
+    public void breakBlock(Vector3f pos) {
+        // Remove from blocks map
+        blocks.remove(pos);
+
+        // Update chunk
+        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
+        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
+        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
+
+        Chunk chunk = chunks.get(chunkKey);
+        if (chunk != null) {
+            int localX = (int)pos.x - chunkX * CHUNK_SIZE;
+            int localZ = (int)pos.z - chunkZ * CHUNK_SIZE;
+            chunk.setBlock(localX, (int)pos.y, localZ, null);
+        }
+    }
+
+    // === INITIAL CHUNK GENERATION ===
+    public void generateInitialChunks() {
+        // Generate spawn chunk first
+        generateChunkInternal(0, 0);
+
+        // Generate immediate area around spawn
+        for (int dx = -PRELOAD_DISTANCE; dx <= PRELOAD_DISTANCE; dx++) {
+            for (int dz = -PRELOAD_DISTANCE; dz <= PRELOAD_DISTANCE; dz++) {
+                // Skip already generated chunks
+                Vector2i key = new Vector2i(dx, dz);
+                if (!chunks.containsKey(key)) {
+                    generateChunkInternal(dx, dz);
+                }
+            }
+        }
+
+        System.out.println("Initial chunks generated: " + chunks.size());
+    }
+
+    public Set<Vector3f> getRenderList() {
+        return blocks.keySet();
     }
 
     public Block getBlock(Vector3f pos) {
@@ -101,44 +251,52 @@ public class WorldManager {
         return blocks.containsKey(new Vector3f(x, y, z));
     }
 
-    public void breakBlock(Vector3f pos) {
-        blocks.remove(pos);
-
-        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
-        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
-        Vector2i chunkKey = new Vector2i(chunkX, chunkZ);
-        Chunk chunk = chunks.get(chunkKey);
-        if (chunk != null) {
-            int localX = (int)pos.x - chunkX * CHUNK_SIZE;
-            int localZ = (int)pos.z - chunkZ * CHUNK_SIZE;
-            chunk.setBlock(localX, (int)pos.y, localZ, null);
-        }
-    }
-
-    public Set<Vector3f> getRenderList() {
-        return blocks.keySet();
-    }
-
-    public Vector3f getSpawnPoint() {
-        int spawnX = CHUNK_SIZE / 2;
-        int spawnZ = CHUNK_SIZE / 2;
-
-        int highestY = -1;
-        for (Vector3f pos : blocks.keySet()) {
-            if ((int)pos.x == spawnX && (int)pos.z == spawnZ) {
-                if (pos.y > highestY) highestY = (int)pos.y;
-            }
-        }
-
-        return new Vector3f(spawnX + 0.5f, highestY + 1.5f, spawnZ + 0.5f);
-    }
-
     public void cleanup() {
+        // Clean up all chunks
         for (Chunk chunk : chunks.values()) {
             chunk.cleanup();
         }
         chunks.clear();
-        loadedChunks.clear();
+
+        // Clear other collections
         blocks.clear();
+        chunksToGenerate.clear();
+        currentlyGenerating.clear();
+    }
+
+    // === ADDITIONAL HELPER METHODS ===
+
+    public int getTotalBlockCount() {
+        return blocks.size();
+    }
+
+    public int getTotalChunkCount() {
+        return chunks.size();
+    }
+
+    public boolean isPositionLoaded(Vector3f pos) {
+        int chunkX = (int)Math.floor(pos.x / CHUNK_SIZE);
+        int chunkZ = (int)Math.floor(pos.z / CHUNK_SIZE);
+        return chunks.containsKey(new Vector2i(chunkX, chunkZ));
+    }
+
+    public boolean isPositionSafe(Vector3f pos) {
+        int x = (int)Math.floor(pos.x);
+        int y = (int)Math.floor(pos.y);
+        int z = (int)Math.floor(pos.z);
+
+        // Check if position has solid ground below
+        for (int checkY = y; checkY >= y - 10; checkY--) {
+            if (hasCube(x, checkY, z)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Force generate a chunk (for testing)
+    public void forceGenerateChunk(int chunkX, int chunkZ) {
+        generateChunkInternal(chunkX, chunkZ);
     }
 }

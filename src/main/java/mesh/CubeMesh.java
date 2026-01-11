@@ -6,6 +6,8 @@ import static org.lwjgl.opengl.GL30.*;
 import org.lwjgl.system.MemoryUtil;
 
 import face.Face;
+import texture.TextureAtlas;
+import world.Block;
 
 import java.nio.FloatBuffer;
 
@@ -106,34 +108,60 @@ public class CubeMesh {
         glBindVertexArray(0);
     }
 
-    public static void addFace(FloatBuffer buffer, int x, int y, int z, Face face) {
+    public void renderAll() {
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, VERTICES.length / 8); // 8 floats per vertex
+        glBindVertexArray(0);
+    }
+
+    public static void addFace(FloatBuffer buffer, int x, int y, int z, Face face,
+                               Block block, TextureAtlas atlas) {
         float[][] verts = face.getVertices();
-        float[] normal = face.getNormal(); // Get normal from Face enum
 
-        // For 16x16 textures with nearest-neighbor
-        float pixelOffset = 0.5f / 16.0f;
+        // Get UV coordinates for this specific face
+        String textureName = block.getTexture(face);
+        TextureAtlas.UVCoords uv = atlas.getUV(textureName);
 
-        float[][] texCoords = {
-                {0.0f + pixelOffset, 1.0f - pixelOffset},
-                {1.0f - pixelOffset, 1.0f - pixelOffset},
-                {1.0f - pixelOffset, 0.0f + pixelOffset},
-                {1.0f - pixelOffset, 0.0f + pixelOffset},
-                {0.0f + pixelOffset, 0.0f + pixelOffset},
-                {0.0f + pixelOffset, 1.0f - pixelOffset}
-        };
+        // Define vertices with proper UVs for this face
+        // Cube faces are defined with vertices in specific order
+        float[][] texCoords;
+
+        switch (face) {
+            case TOP:
+                texCoords = new float[][] {
+                        {uv.u1, uv.v2},  // bottom-left
+                        {uv.u2, uv.v2},  // bottom-right
+                        {uv.u2, uv.v1},  // top-right
+                        {uv.u2, uv.v1},  // top-right (duplicate)
+                        {uv.u1, uv.v1},  // top-left
+                        {uv.u1, uv.v2}   // bottom-left (duplicate)
+                };
+                break;
+            case BOTTOM:
+                texCoords = new float[][] {
+                        {uv.u1, uv.v1},
+                        {uv.u2, uv.v1},
+                        {uv.u2, uv.v2},
+                        {uv.u2, uv.v2},
+                        {uv.u1, uv.v2},
+                        {uv.u1, uv.v1}
+                };
+                break;
+            default: // Sides
+                texCoords = new float[][] {
+                        {uv.u1, uv.v2},
+                        {uv.u2, uv.v2},
+                        {uv.u2, uv.v1},
+                        {uv.u2, uv.v1},
+                        {uv.u1, uv.v1},
+                        {uv.u1, uv.v2}
+                };
+        }
 
         for (int i = 0; i < 6; i++) {
-            // Position (3 floats)
             buffer.put(verts[i][0] + x);
             buffer.put(verts[i][1] + y);
             buffer.put(verts[i][2] + z);
-
-            // Normal (3 floats) - ADD THIS!
-            buffer.put(normal[0]);
-            buffer.put(normal[1]);
-            buffer.put(normal[2]);
-
-            // Texture coordinates (2 floats)
             buffer.put(texCoords[i][0]);
             buffer.put(texCoords[i][1]);
         }

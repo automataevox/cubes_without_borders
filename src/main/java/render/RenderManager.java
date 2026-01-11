@@ -9,6 +9,7 @@ import mesh.CubeMesh;
 import texture.Texture;
 import camera.Camera;
 import face.Face;
+import texture.TextureAtlas;
 import world.Block;
 import world.Chunk;
 import world.WorldManager;
@@ -17,13 +18,12 @@ import java.io.IOException;
 import java.util.*;
 
 public class RenderManager {
-
     private final CubeMesh cubeMesh;
     private final Shader shader;
     private final Camera camera;
     private final WorldManager worldManager;
     private final ShadowManager shadowManager;
-    private final ChunkRenderer chunkRenderer; // ADD THIS
+    private final ChunkRenderer chunkRenderer;
 
     // Cache textures to avoid reloading every frame
     private final Map<String, Texture> textureCache = new HashMap<>();
@@ -34,81 +34,81 @@ public class RenderManager {
         this.shadowManager = shadow;
 
         this.cubeMesh = new CubeMesh();
-        this.shader = new Shader(
-                "shader/cube/cube.vert",
-                "shader/cube/cube.frag"
-        );
-        this.chunkRenderer = new ChunkRenderer(world, cam, shadow); // ADD THIS
-
+        this.shader = new Shader("shader/cube/cube.vert", "shader/cube/cube.frag");
+        this.chunkRenderer = new ChunkRenderer(world, cam, shadow);
     }
 
-    private Texture getTexture(String path) {
-        return textureCache.computeIfAbsent(path, p -> {
+    // ADD THIS METHOD
+    public TextureAtlas getTextureAtlas() {
+        return chunkRenderer.getTextureAtlas();
+    }
+
+    // ADD THIS TEST METHOD TOO
+    public void testMeshBuilding() {
+        System.out.println("=== Testing Mesh Building ===");
+
+        Vector3f spawn = worldManager.getSpawnPoint();
+        int chunkX = (int)Math.floor(spawn.x / 16);
+        int chunkZ = (int)Math.floor(spawn.z / 16);
+
+        Chunk chunk = worldManager.getChunkAt(chunkX, chunkZ);
+        if (chunk == null) {
+            System.out.println("No chunk found at spawn!");
+            return;
+        }
+
+        System.out.println("Chunk has " + chunk.getVisibleBlockCount() + " visible blocks");
+
+        if (chunk.getVisibleBlockCount() > 0) {
             try {
-                return new Texture(p);
-            } catch (IOException e) {
+                mesh.ChunkMesh testMesh = new mesh.ChunkMesh();
+                testMesh.buildSync(chunk, getTextureAtlas());
+                System.out.println("Test mesh built: " + testMesh.isValid() +
+                        " (" + testMesh.getVertexCount() + " vertices)");
+                testMesh.cleanup();
+            } catch (Exception e) {
+                System.err.println("Failed to build mesh: " + e.getMessage());
                 e.printStackTrace();
-                throw new RuntimeException("Failed to load texture: " + p);
             }
-        });
+        } else {
+            System.out.println("Chunk has no visible blocks to render!");
+        }
+    }
+
+    public void setPriorityChunks(List<String> priorityChunks) {
+        // Pass through to chunk renderer
+        chunkRenderer.setPriorityChunks(priorityChunks);
     }
 
     public void render() {
-        // OPTION 1: Use chunk rendering (FAST - 100+ FPS)
+        // Use chunk rendering (optimized)
         chunkRenderer.render();
 
-        // OPTION 2: Use old per-block rendering (SLOW - for debugging only)
-        //renderPerBlock(); // Comment this out for production
+        // Uncomment for debugging per-block rendering (slow)
+        // renderPerBlock();
     }
 
     private void renderPerBlock() {
+        // Old per-block rendering for debugging only
         shader.bind();
-        GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        shadowManager.getDepthTexture().bind();
 
-        // --- Sun movement ---
-        float time = (System.currentTimeMillis() % 120000) / 120000.0f;
-        float sunAngle = time * 2.0f * (float)Math.PI;
-        Vector3f sunDir = new Vector3f((float)Math.sin(sunAngle), (float)Math.cos(sunAngle), -0.3f).normalize();
+        // Simple lighting setup for debug rendering
+        Vector3f sunDir = new Vector3f(0.5f, 0.8f, 0.3f).normalize();
         Vector3f sunColor = new Vector3f(1.0f, 0.95f, 0.85f);
         Vector3f globalIllum = new Vector3f(0.18f, 0.20f, 0.22f);
 
         shader.setUniform3f("u_LightDir", sunDir);
         shader.setUniform3f("u_LightColor", sunColor);
         shader.setUniform3f("u_Ambient", globalIllum);
-        shader.setUniform1i("shadowMap", 1);
-        shader.setUniformMat4f("u_LightSpaceMatrix", shadowManager.getLightSpaceMatrix());
+        shader.setUniform1f("u_Sunlit", 1.0f);
+        shader.setUniform3f("u_ViewPos", camera.getPosition());
 
-        // Group blocks by texture FIRST to reduce texture binds
-        Map<String, List<Vector3f>> blocksByTexture = new HashMap<>();
-
-        for (Vector3f cubePos : worldManager.getRenderList()) {
-            Block block = worldManager.getBlock(cubePos);
-            if (block == null) continue;
-
-            blocksByTexture
-                    .computeIfAbsent(block.getTexture(), k -> new ArrayList<>())
-                    .add(cubePos);
-        }
-
-        // Render all blocks of the same texture together
-        for (Map.Entry<String, List<Vector3f>> entry : blocksByTexture.entrySet()) {
-            String texturePath = entry.getKey();
-            if (texturePath.isEmpty()) continue;
-
-            Texture texture = getTexture(texturePath);
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            texture.bind();
-            shader.setUniform1i("u_Texture", 0);
-
-            for (Vector3f cubePos : entry.getValue()) {
-                EnumSet<Face> visibleFaces = getVisibleFaces(cubePos);
-                for (Face face : visibleFaces) {
-                    renderFace(cubePos, face);
-                }
+        // Render each block
+        for (Vector3f pos : worldManager.getRenderList()) {
+            EnumSet<Face> visibleFaces = getVisibleFaces(pos);
+            for (Face face : visibleFaces) {
+                renderFace(pos, face);
             }
-
-            texture.unbind();
         }
 
         shader.unbind();
@@ -119,7 +119,6 @@ public class RenderManager {
 
         // Check if face is sunlit (no block above in sun direction)
         float sunlit = 1.0f;
-        // Only check for top face (y+)
         if (face == Face.TOP) {
             int aboveX = (int) cubePos.x;
             int aboveY = (int) cubePos.y + 1;
@@ -149,8 +148,6 @@ public class RenderManager {
         };
     }
 
-
-
     private EnumSet<Face> getVisibleFaces(Vector3f pos) {
         EnumSet<Face> faces = EnumSet.allOf(Face.class);
 
@@ -167,8 +164,10 @@ public class RenderManager {
         return faces;
     }
 
+
+
     public void cleanup() {
-        chunkRenderer.cleanup(); // Clean up chunk renderer
+        chunkRenderer.cleanup();
         shader.cleanup();
         for (Texture tex : textureCache.values()) {
             tex.cleanup();
